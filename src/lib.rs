@@ -23,9 +23,8 @@
 #![allow(dead_code, non_camel_case_types)]
 #![allow(clippy::uninit_assumed_init, clippy::upper_case_acronyms)]
 
-extern crate embedded_hal as ehal;
-
-use ehal::blocking::i2c::{Write, WriteRead};
+use embedded_hal::i2c::I2c;
+use thiserror::Error;
 
 /// The default I2C address of the MCP23017.
 const DEFAULT_ADDRESS: u8 = 0x20;
@@ -38,47 +37,27 @@ const LOW: bool = false;
 /// See the crate-level documentation for general info on the device and the operation of this
 /// driver.
 #[derive(Clone, Copy, Debug)]
-pub struct MCP23017<I2C: Write + WriteRead> {
+pub struct MCP23017<I2C: I2c, const ADDR: u8> {
     com: I2C,
-    /// The I2C slave address of this device.
-    pub address: u8,
 }
 
 /// Defines errors
-#[derive(Debug, Copy, Clone)]
+#[derive(Error, Debug)]
+#[allow(missing_docs)]
 pub enum Error<E> {
-    /// Underlying bus error
-    BusError(E),
-    /// Interrupt pin not found
+    #[error("Underlying bus error")]
+    BusError(#[from] E),
+    #[error("Interrupt pin not found")]
     InterruptPinError,
 }
 
-impl<E> From<E> for Error<E> {
-    fn from(error: E) -> Self {
-        Error::BusError(error)
-    }
-}
-
-impl<I2C, E> MCP23017<I2C>
+impl<I2C, E, const ADDR: u8> MCP23017<I2C, ADDR>
 where
-    I2C: WriteRead<Error = E> + Write<Error = E>,
+    I2C: I2c<Error = E>,
 {
     /// Creates an expander with the default configuration.
-    pub fn default(i2c: I2C) -> Result<MCP23017<I2C>, Error<E>>
-    where
-        I2C: Write<Error = E> + WriteRead<Error = E>,
-    {
-        MCP23017::new(i2c, DEFAULT_ADDRESS)
-    }
-
-    /// Creates an expander with specific address.
-    pub fn new(i2c: I2C, address: u8) -> Result<MCP23017<I2C>, Error<E>>
-    where
-        I2C: Write<Error = E> + WriteRead<Error = E>,
-    {
-        let chip = MCP23017 { com: i2c, address };
-
-        Ok(chip)
+    pub fn new(dev: I2C) -> MCP23017<I2C, ADDR> {
+        MCP23017 { com: dev }
     }
 
     /// Initiates hardware with basic setup.
@@ -92,24 +71,23 @@ where
 
     fn read_register(&mut self, reg: Register) -> Result<u8, E> {
         let mut data: [u8; 1] = [0];
-        self.com.write_read(self.address, &[reg as u8], &mut data)?;
+        self.com.write_read(ADDR, &[reg as u8], &mut data)?;
         Ok(data[0])
     }
 
     fn read_double_register(&mut self, reg: Register) -> Result<[u8; 2], E> {
         let mut buffer: [u8; 2] = [0; 2];
-        self.com
-            .write_read(self.address, &[reg as u8], &mut buffer)?;
+        self.com.write_read(ADDR, &[reg as u8], &mut buffer)?;
         Ok(buffer)
     }
 
     fn write_register(&mut self, reg: Register, byte: u8) -> Result<(), E> {
-        self.com.write(self.address, &[reg as u8, byte])
+        self.com.write(ADDR, &[reg as u8, byte])
     }
 
     fn write_double_register(&mut self, reg: Register, word: u16) -> Result<(), E> {
         let msb = (word >> 8) as u8;
-        self.com.write(self.address, &[reg as u8, word as u8, msb])
+        self.com.write(ADDR, &[reg as u8, word as u8, msb])
     }
 
     /// Updates a single bit in the register associated with the given pin.
@@ -336,11 +314,7 @@ fn bit_for_pin(pin: u8) -> u8 {
 
 /// Returns the register address, port dependent, for a given pin.
 fn register_for_pin(pin: u8, port_a_addr: Register, port_b_addr: Register) -> Register {
-    if pin < 8 {
-        port_a_addr
-    } else {
-        port_b_addr
-    }
+    if pin < 8 { port_a_addr } else { port_b_addr }
 }
 
 /// Pin modes.
